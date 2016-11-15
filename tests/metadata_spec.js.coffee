@@ -1,7 +1,9 @@
 proxyquire = require('proxyquireify')(require)
 
 OriginalWalletCrypto = require('../src/wallet-crypto');
+# BitcoinJS = require('bitcoinjs-lib');
 
+# mock derivation to generate hdnode from string deterministically
 MyWallet =
   wallet:
     syncWallet: () ->
@@ -9,54 +11,21 @@ MyWallet =
       getMasterHDNode: () ->
         deriveHardened: (purpose) ->
           deriveHardened: (payloadType) ->
-            deriveHardened: (i) ->
-              path = "m/#{ purpose }'/#{ payloadType }'/#{ i }'"
-              {
-                getAddress: () -> path + "-address"
-                getPublicKeyBuffer: () ->
-                  slice: (start, offset) ->
-                    "#{ path }-pubkey-buffer-slice-#{ start }-#{ offset }"
-                keyPair:
-                  toString: () -> "#{ path }-keyPair"
-                  d:
-                    toBuffer: () ->
-                      "#{ path }-private-key-buffer"
-              }
+            deriveHardened: (i) -> BitcoinJS.HDNode.fromSeedBuffer(
+                                     OriginalWalletCrypto.sha256(
+                                      "m/#{ purpose }'/#{ payloadType }'/#{ i }'"))
 
 BitcoinJS = {
-  message:
-    magicHash: (payload) ->
-      "#{ payload }|magicHash"
-    sign: (keyPair, payload) ->
-      "#{ payload }|#{ keyPair }-signature"
-    verify: (address, signatureBuffer, message) ->
-      signature = signatureBuffer.toString('utf8')
-      key = address.replace("0'-address", "0'-keyPair")
-      if signature.indexOf(key) == -1
-        false
-      else
-        true
 }
-
+# disable encryption layer
 WalletCrypto = {
-  sha256: (x) ->
-    if x == "info.blockchain.metadata"
-      OriginalWalletCrypto.sha256(x) # Too tedious to mock
-    else
-      "#{ x }|sha256"
-
-  encryptDataWithKey: (data, key) ->
-    "random|#{ data }|encrypted-with-random+#{ key }|base64"
-
-
-  decryptDataWithKey: (data, key) ->
-    payload = data.split('|')[1]
+  encryptDataWithKey: (data, key) -> Buffer.from(data).toString('base64'),
+  decryptDataWithKey: (data, key) -> Buffer.from(data, 'base64').toString()
 }
-
 stubs = {
-  './wallet': MyWallet,
   './wallet-crypto': WalletCrypto,
-  'bitcoinjs-lib': BitcoinJS
+  'bitcoinjs-lib': BitcoinJS,
+  './wallet': MyWallet
 }
 
 Metadata = proxyquire('../src/metadata', stubs)
@@ -66,37 +35,21 @@ describe "Metadata", ->
   c = undefined
   helloWorld = {hello: "world"}
   unencryptedData = JSON.stringify(helloWorld)
-  encryptedData = "random|#{ unencryptedData }|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64"
+  encryptedData = "eyJoZWxsbyI6IndvcmxkIn0="
   serverPayload = {
     version:1,
-    payload_type_id:2
+    type_id:2
     payload: encryptedData,
-    signature:"#{ encryptedData }|m/510742'/2'/0'-keyPair-signature",
+    signature:"HysANE1TFkCEX/5zxj+8BXKtld4FIjVXqOKl3K1XdMj8HT5RsigY3iF4LOvMT5IpstZZYAcchZTB4xZrJZPkdKM=",
     created_at:1468316898000,
     updated_at:1468316941000,
   }
-  expectedPayloadPOST = {
-    version:1,
-    payload_type_id:2
-    payload: encryptedData,
-    signature:"#{ encryptedData }|m/510742'/2'/0'-keyPair-signature"
-  }
-  unencryptedDataPUT = JSON.stringify({hello: 'world again'})
-  encryptedDataPUT = "random|#{ unencryptedDataPUT }|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64"
-
   expectedPayloadPUT = {
     version:1,
-    payload_type_id:2
-    prev_magic_hash: "#{ unencryptedDataPUT }|magicHash"
-    payload: encryptedDataPUT,
-    signature:"#{ encryptedDataPUT }|m/510742'/2'/0'-keyPair-signature"
+    type_id:2
+    payload: encryptedData,
+    signature:"HysANE1TFkCEX/5zxj+8BXKtld4FIjVXqOKl3K1XdMj8HT5RsigY3iF4LOvMT5IpstZZYAcchZTB4xZrJZPkdKM="
   }
-
-  beforeEach ->
-    JasminePromiseMatchers.install()
-
-  afterEach ->
-    JasminePromiseMatchers.uninstall()
 
   describe "class", ->
     describe "new Metadata()", ->
@@ -106,58 +59,49 @@ describe "Metadata", ->
         expect(c.constructor.name).toEqual("Metadata")
 
       it "should set the address", ->
-        expect(c._address).toEqual("m/510742'/2'/0'-address")
+        expect(c._address).toEqual("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
 
       it "should set the signature KeyPair", ->
-        expect(c._signatureKeyPair.toString()).toEqual("m/510742'/2'/0'-keyPair")
+        expect(c._signatureKeyPair.toWIF()).toEqual("KzqabBBuqVMacWmiuw21zccSTuXuLQYoMDj1ZVN8GS5ceT7mGDoj")
 
       it "should set the encryption key", ->
-        expect(c._encryptionKey.toString()).toEqual("m/510742'/2'/1'-private-key-buffer|sha256")
+        expect(c._encryptionKey.toString('hex')).toEqual("7ff633262c6adadba38f55ab871a2c7ec2720b4cfed225fe9e25c9fd057c9b95")
 
 
   describe "API", ->
     beforeEach ->
       c = new Metadata(2)
       spyOn(c, "request").and.callFake((method, endpoint, data) ->
-        if method == "GET" && endpoint == ""
-          new Promise((resolve) -> resolve(serverPayload))
+        if method == "GET" && endpoint == "13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR"
+          Promise.resolve(serverPayload)
         else # 404 is resolved as null
-          new Promise((resolve) -> resolve(null))
+          Promise.resolve(null)
       )
 
     describe "API", ->
       describe "GET", ->
         it "should call request with GET", ->
-          c.GET("m/510742'/2'/0'-keyPair")
+          c.GET("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
           expect(c.request).toHaveBeenCalledWith(
             'GET',
-            "m/510742'/2'/0'-keyPair",
+            "13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR",
             undefined
           )
 
         it "should resolve with an encrypted payload",  ->
-          promise = c.GET("m/510742'/2'/0'-keyPair")
+          promise = c.GET("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
           expect(promise).toBeResolvedWith(serverPayload)
 
         it "should resolve 404 with null",  ->
-          promise = c.GET("m/510742'/3'/0'-keyPair")
+          promise = c.GET("non existing address")
           expect(promise).toBeResolvedWith(null)
-
-      describe "POST", ->
-        it "should call request with POST", ->
-          c.POST("m/510742'/3'/0'-keyPair", "new_payload")
-          expect(c.request).toHaveBeenCalledWith(
-            'POST',
-            "m/510742'/3'/0'-keyPair",
-            "new_payload"
-          )
 
       describe "PUT", ->
         it "should call request with PUT", ->
-          c.PUT("m/510742'/3'/0'-keyPair", "new_payload")
+          c.PUT("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR", "new_payload")
           expect(c.request).toHaveBeenCalledWith(
             'PUT',
-            "m/510742'/3'/0'-keyPair",
+            "13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR",
             "new_payload"
           )
 
@@ -168,50 +112,27 @@ describe "Metadata", ->
       c = new Metadata(2)
 
       spyOn(c, "GET").and.callFake((endpoint, data) ->
-        new Promise (resolve, reject) ->
-          if endpoint == "m/510742'/2'/0'-address" # 200
-            payloadWithBase64sig = JSON.parse(JSON.stringify(serverPayload));
-            payloadWithBase64sig.signature = Buffer(serverPayload.signature, 'utf8').toString('base64')
-            resolve(payloadWithBase64sig)
-          else if endpoint == "m/510742'/3'/0'-address" # 404
-            resolve(null)
-          else
-            reject("Unknown endpoint")
+        switch endpoint
+          when "13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR" then Promise.resolve(serverPayload)
+          when "wrong-address" then Promise.resolve(null)
+          else Promise.reject("Unknown endpoint")
       )
-
-      spyOn(c, "POST").and.callFake((endpoint, data) ->
-        new Promise (resolve, reject) ->
-          if endpoint == "m/510742'/2'/0'-address"
-            if data.payload && data.payload.split('|')[1] == '"fail"'
-              reject()
-            else
-              resolve({})
-          else
-            reject("Unknown endpoint")
-      )
-
       spyOn(c, "PUT").and.callFake((endpoint, data) ->
-        new Promise (resolve, reject) ->
-          if endpoint == "m/510742'/2'/0'-address"
-            resolve({})
-          else
-            reject("Unknown endpoint")
+        dec = WalletCrypto.decryptDataWithKey(data.payload, 'mykey')
+        switch dec
+          when '"fail"' then Promise.reject()
+          else Promise.resolve({})
       )
-
-    describe "setMagicHash", ->
-      it "should calculate and store based on contents", ->
-        c.setMagicHash(encryptedData)
-        expect(c._magicHash).toEqual("#{ encryptedData }|magicHash")
 
     describe "create", ->
       it "should encrypt data", (done) ->
-        spyOn(WalletCrypto, "encryptDataWithKey")
+        spyOn(WalletCrypto, "encryptDataWithKey").and.callThrough()
         c.create({hello: 'world'}).then ->
           expect(WalletCrypto.encryptDataWithKey).toHaveBeenCalledWith(
             JSON.stringify({hello: 'world'}),
             c._encryptionKey
           )
-        done()
+          done()
 
       it "magicHash should be null initially", ->
         expect(c._magicHash).toEqual(null)
@@ -219,34 +140,35 @@ describe "Metadata", ->
       it "value should be null initially", ->
         expect(c._value).toEqual(null)
 
-      describe "POST", ->
-        postData = undefined
-
+      describe "PUT", ->
+        putData = undefined
         beforeEach (done) ->
+          # spyOn(WalletCrypto, "encryptDataWithKey").and.callFake((endpoint, data) -> "GOxW6Sdo5snuttk62tqvjexwg5NZjBTb5rT+uIRNcop14IwuPLy0c/poILGDswUs")
+          spyOn(WalletCrypto, "encryptDataWithKey").and.callThrough()
           c.create({hello: 'world'}).then ->
-            postData = c.POST.calls.argsFor(0)[1]
+            putData = c.PUT.calls.argsFor(0)[1]
             done()
 
         it "should be called", ->
-          expect(c.POST).toHaveBeenCalled()
+          expect(c.PUT).toHaveBeenCalled()
 
         it "should use the right address", ->
-          expect(c.POST.calls.argsFor(0)[0]).toEqual("m/510742'/2'/0'-address")
+          expect(c.PUT.calls.argsFor(0)[0]).toEqual("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
 
         it "should use version 1", ->
-          expect(postData.version).toEqual(1)
+          expect(putData.version).toEqual(1)
 
         it "should use the right payload type", ->
-          expect(postData.payload_type_id).toEqual(c._payloadTypeId)
+          expect(putData.type_id).toEqual(c._payloadTypeId)
 
         it "should send encrypted payload", ->
-          expect(postData.payload).toEqual(expectedPayloadPOST.payload)
+          expect(putData.payload).toEqual(expectedPayloadPUT.payload)
 
         it "should send signature", ->
-          expect(postData.signature).toEqual(expectedPayloadPOST.signature)
+          expect(putData.signature).toEqual(expectedPayloadPUT.signature)
 
         it "should not send additional arguments", ->
-          expect(Object.keys(postData).length).toEqual(4)
+          expect(Object.keys(putData).length).toEqual(5)
 
       describe "if successful", ->
         beforeEach ->
@@ -258,12 +180,6 @@ describe "Metadata", ->
         it "should remember the new value", (done) ->
           promise.then(() ->
             expect(c._value).toEqual({hello: "world"})
-            done()
-          )
-
-        it "should remember the magic hash", (done) ->
-          promise.then(() ->
-            expect(c._magicHash).toEqual("random|{\"hello\":\"world\"}|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64|magicHash")
             done()
           )
 
@@ -288,14 +204,16 @@ describe "Metadata", ->
         expect(c._value).toEqual(null)
 
       it "should GET", (done) ->
-        c.fetch().then ->
+        c.fetch().then( ->
           expect(c.GET).toHaveBeenCalled()
           done()
+        ).catch(done)
 
       it "should use the right address", (done) ->
-        c.fetch().then ->
-          expect(c.GET.calls.argsFor(0)[0]).toEqual("m/510742'/2'/0'-address")
+        c.fetch().then( ->
+          expect(c.GET.calls.argsFor(0)[0]).toEqual("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
           done()
+          ).catch(done)
 
       it "should decrypt data and verify signature", (done) ->
         spyOn(WalletCrypto, "decryptDataWithKey").and.callThrough()
@@ -306,17 +224,13 @@ describe "Metadata", ->
             encryptedData,
             c._encryptionKey
           )
-
           expect(BitcoinJS.message.verify).toHaveBeenCalled()
-
           args = BitcoinJS.message.verify.calls.argsFor(0)
-
-          expect(args[0]).toEqual("m/510742'/2'/0'-address")
-          expect(args[1].toString('utf8')).toEqual(serverPayload.signature)
+          expect(args[0]).toEqual("13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR")
+          expect(args[1].toString('base64')).toEqual(serverPayload.signature)
           expect(args[2]).toEqual(encryptedData)
-
           done()
-        )
+        ).catch(done)
 
 
 
@@ -333,27 +247,15 @@ describe "Metadata", ->
             done()
           )
 
-        it "should remember the magic hash", (done) ->
-          promise.then(() ->
-            expect(c._magicHash).toEqual("random|{\"hello\":\"world\"}|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64|magicHash")
-            done()
-          )
-
       describe "if resolved with null", ->
         beforeEach ->
             c._payloadTypeId = 3
-            c._address = "m/510742'/3'/0'-address"
+            c._address = "13A5G6RfnG5dEtQvw6Yq8t8CH7bU5wKpTR"
             promise = c.fetch()
 
         it "should return null", (done) ->
           expect(promise).toBeResolvedWith(null)
           done()
-
-        it "should not have a value or magic hash", (done) ->
-          promise.then((val) ->
-            expect(c._magicHash).toEqual(null)
-            done()
-          )
 
       describe "if failed", ->
         beforeEach ->
@@ -373,26 +275,11 @@ describe "Metadata", ->
 
     describe "update", ->
       beforeEach ->
-        c._magicHash = "random|{\"hello\":\"world\"}|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64|magicHash"
+        c._magicHash = ""
         c._value = helloWorld
         c._previousPayload = '{"hello":"world"}'
         spyOn(WalletCrypto, "encryptDataWithKey").and.callThrough()
 
-      it "should immedidately resolve for identical object", (done) ->
-        promise = c.update(helloWorld)
-        expect(promise).toBeResolved()
-        promise.then(() ->
-          expect(WalletCrypto.encryptDataWithKey).not.toHaveBeenCalled()
-          done()
-        )
-
-      it "should immedidately resolve for the same string", (done) ->
-        promise = c.update({hello: 'world'})
-        expect(promise).toBeResolved()
-        promise.then(() ->
-          expect(WalletCrypto.encryptDataWithKey).not.toHaveBeenCalled()
-          done()
-        )
 
       it "should update on the server",  (done) ->
         promise = c.update({hello: 'world again'})
@@ -403,43 +290,8 @@ describe "Metadata", ->
             JSON.stringify({hello: 'world again'}),
             c._encryptionKey
           )
-
           done()
         )
-
-      describe "PUT", ->
-        prevHash = undefined
-        putData = undefined
-
-        beforeEach (done) ->
-          prevHash = c._magicHash
-          c.update({hello: 'world again'}).then ->
-            putData = c.PUT.calls.argsFor(0)[1]
-            done()
-
-        it "should be called", ->
-          expect(c.PUT).toHaveBeenCalled()
-
-        it "should use the right address", ->
-          expect(c.PUT.calls.argsFor(0)[0]).toEqual("m/510742'/2'/0'-address")
-
-        it "should use version 1", ->
-          expect(putData.version).toEqual(1)
-
-        it "should use the right payload type", ->
-          expect(putData.payload_type_id).toEqual(c._payloadTypeId)
-
-        it "should send the previous magic hash", ->
-          expect(putData.prev_magic_hash).toEqual(prevHash)
-
-        it "should send encrypted payload", ->
-          expect(putData.payload).toEqual(expectedPayloadPUT.payload)
-
-        it "should send signature", ->
-          expect(putData.signature).toEqual(expectedPayloadPUT.signature)
-
-        it "should not send additional arguments", ->
-          expect(Object.keys(putData).length).toEqual(5)
 
       describe "if successful", ->
         beforeEach ->
@@ -453,7 +305,7 @@ describe "Metadata", ->
 
         it "should remember the magic hash", (done) ->
           promise.then(() ->
-            expect(c._magicHash).toEqual("random|{\"hello\":\"world again\"}|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64|magicHash")
+            expect(c._magicHash.toString('hex')).toEqual("0453a7ac2c9824e20e858f284b9042d76efc150bfdb2b9d99d8e29b042a16857")
             done()
           )
 
@@ -466,15 +318,3 @@ describe "Metadata", ->
         it "should reject", (done) ->
           expect(promise).toBeRejected()
           done()
-
-        it "should keep the previous value", (done) ->
-          promise.catch(() ->
-            expect(c._value).toEqual(helloWorld)
-            done()
-          )
-
-        it "should keep the previous magic hash", (done) ->
-          promise.catch(() ->
-            expect(c._magicHash).toEqual("random|{\"hello\":\"world\"}|encrypted-with-random+m/510742'/2'/1'-private-key-buffer|sha256|base64|magicHash")
-            done()
-          )

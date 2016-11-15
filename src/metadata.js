@@ -4,8 +4,6 @@ var WalletCrypto = require('./wallet-crypto');
 var Bitcoin = require('bitcoinjs-lib');
 var API = require('./api');
 var Helpers = require('./helpers');
-var constants = require('./constants');
-
 var MyWallet = require('./wallet');
 
 module.exports = Metadata;
@@ -26,29 +24,42 @@ function Metadata (payloadType, cipher) {
   var metaDataHDNode = masterHDNode.deriveHardened(purpose);
 
   // Payload types:
-  // 0: reserved (guid)
+  // 0: reserved
   // 1: reserved
   // 2: whats-new
-  // 3: buy-sell
-  // 4: contacts list (messaging)
 
   var payloadTypeNode = metaDataHDNode.deriveHardened(payloadType);
-
   // purpose' / type' / 0' : https://meta.blockchain.info/{address}
   //                       signature used to authenticate
   // purpose' / type' / 1' : sha256(private key) used as 256 bit AES key
+  var node = payloadTypeNode.deriveHardened(0);
 
-  this._node = payloadTypeNode.deriveHardened(0);
-
-  this._address = this._node.getAddress();
-  this._signatureKeyPair = this._node.keyPair;
+  this._address = node.getAddress();
+  this._signatureKeyPair = node.keyPair;
 
   var privateKeyBuffer = payloadTypeNode.deriveHardened(1).keyPair.d.toBuffer();
   this._encryptionKey = WalletCrypto.sha256(privateKeyBuffer);
 }
 
-Metadata.prototype.setMagicHash = function (encryptedPayload) {
-  this._magicHash = Bitcoin.message.magicHash(encryptedPayload, constants.getNetwork());
+// Buffer -> Buffer -> Base64String
+Metadata.prototype.message = function (payload, prev) {
+  if (prev) {
+    var hash = WalletCrypto.sha256(payload);
+    var buff = Buffer.concat([prev, hash]);
+    return buff.toString('base64');
+  } else {
+    return payload.toString('base64');
+  }
+};
+
+// Buffer -> Buffer -> Buffer
+Metadata.prototype.magic = function (payload, prev) {
+  var msg = this.message(payload, prev);
+  return Bitcoin.message.magicHash(msg, Bitcoin.networks.bitcoin);
+};
+
+Metadata.prototype.sign = function (key, msg) {
+  return Bitcoin.message.sign(key, msg);
 };
 
 Object.defineProperties(Metadata.prototype, {
@@ -58,37 +69,29 @@ Object.defineProperties(Metadata.prototype, {
   }
 });
 
-/*
-metadata = new Blockchain.Metadata(2);
-metadata.create({
-  lastViewed: Date.now()
-});
-*/
-Metadata.prototype.create = function (data) {
+Metadata.prototype.create = function (payload) {
   var self = this;
-  return this.next(function () {
-    var payload = JSON.stringify(data);
-
-    var encryptedPayload = WalletCrypto.encryptDataWithKey(payload, self._encryptionKey);
-
-    var encryptedPayloadSignature = Bitcoin.message.sign(
-      self._signatureKeyPair,
-      encryptedPayload,
-      constants.getNetwork()
-    );
-
-    var serverPayload = {
-      version: 1,
-      payload_type_id: self._payloadTypeId,
-      payload: encryptedPayload,
-      signature: encryptedPayloadSignature.toString('base64')
-    };
-
-    return self.POST(self._address, serverPayload).then(function () {
-      self._value = data;
-      self.setMagicHash(encryptedPayload);
-    });
-  });
+  return this.next(
+    function () {
+      var payloadString = JSON.stringify(payload);
+      var encPayloadBuffer = Buffer.from(WalletCrypto.encryptDataWithKey(payloadString, self._encryptionKey), 'base64');
+      var nextMagicHash = self.magic(encPayloadBuffer, self._magicHash);
+      var signatureBuffer = self.sign(self._signatureKeyPair, self.message(encPayloadBuffer, self._magicHash));
+      var obj = {
+        'version': 1,
+        'payload': encPayloadBuffer.toString('base64'),
+        'signature': signatureBuffer.toString('base64'),
+        'prev_magic_hash': self._magicHash ? self._magicHash.toString('hex') : null,
+        'type_id': self._payloadTypeId
+      };
+      return self.PUT(self._address, obj).then(
+        function () {
+          self._value = payload;
+          self._magicHash = nextMagicHash;
+        }
+      );
+    }
+  );
 };
 
 Metadata.prototype.fetch = function () {
@@ -98,19 +101,19 @@ Metadata.prototype.fetch = function () {
       if (serverPayload === null) {
         return null;
       }
-
       var decryptedPayload = WalletCrypto.decryptDataWithKey(serverPayload.payload, self._encryptionKey);
-
-      var verified = self._verify(
-        Buffer(serverPayload.signature, 'base64'),
-        serverPayload.payload,
-        constants.getNetwork()
-      );
+      var p = serverPayload.payload;
+      var s = serverPayload.signature;
+      var m = serverPayload.prev_magic_hash;
+      var sB = s ? Buffer.from(s, 'base64') : undefined;
+      var pB = p ? Buffer.from(p, 'base64') : undefined;
+      var mB = m ? Buffer.from(m, 'hex') : undefined;
+      var verified = Bitcoin.message.verify(self._address, sB, self.message(pB, mB));
 
       if (verified) {
         self._previousPayload = decryptedPayload;
         self._value = JSON.parse(decryptedPayload);
-        self.setMagicHash(serverPayload.payload);
+        self._magicHash = self.magic(pB, mB);
         return self._value;
       } else {
         throw new Error('METADATA_SIGNATURE_VERIFICATION_ERROR');
@@ -122,54 +125,18 @@ Metadata.prototype.fetch = function () {
   });
 };
 
-// Overridden in Objective-C
-Metadata.prototype._verify = function (signature, message) {
-  return Bitcoin.message.verify(this._address, signature, message);
-};
 /*
 metadata.update({
   lastViewed: Date.now()
 });
 */
-Metadata.prototype.update = function (data) {
-  var self = this;
-  return this.next(function () {
-    var payload = JSON.stringify(data);
-    if (payload === self._previousPayload) {
-      return Promise.resolve();
-    }
-    self._previousPayload = payload;
-    var encryptedPayload = WalletCrypto.encryptDataWithKey(payload, self._encryptionKey);
-    var encryptedPayloadSignature = Bitcoin.message.sign(
-      self._signatureKeyPair,
-      encryptedPayload,
-      constants.getNetwork()
-    );
-
-    var serverPayload = {
-      version: 1,
-      payload_type_id: self._payloadTypeId,
-      prev_magic_hash: self._magicHash.toString('hex'),
-      payload: encryptedPayload,
-      signature: encryptedPayloadSignature.toString('base64')
-    };
-
-    return self.PUT(self._address, serverPayload).then(function () {
-      self._value = data;
-      self.setMagicHash(encryptedPayload);
-    });
-  });
-};
+Metadata.prototype.update = Metadata.prototype.create;
 
 Metadata.prototype.GET = function (endpoint, data) {
   // if (this._payloadTypeId === 3) {
   //   return Promise.reject('DEBUG: simulate meta data service failure');
   // }
   return this.request('GET', endpoint, data);
-};
-
-Metadata.prototype.POST = function (endpoint, data) {
-  return this.request('POST', endpoint, data);
 };
 
 Metadata.prototype.PUT = function (endpoint, data) {
