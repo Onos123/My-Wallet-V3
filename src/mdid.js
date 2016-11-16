@@ -47,9 +47,7 @@ MDID.prototype.verify = function (message, signature, mdid) {
 }
 
 MDID.prototype.request = function (method, endpoint, data) {
-  var url = 'http://local.blockchain.com:3000' + endpoint;
-  // var url = API.API_ROOT_URL + 'metadata/' + endpoint;
-
+  var url = API.API_ROOT_URL + 'metadata/' + endpoint;
   var options = {
     headers: {
       'Content-Type': 'application/json',
@@ -95,40 +93,40 @@ MDID.prototype.request = function (method, endpoint, data) {
 };
 
 MDID.prototype.getToken = function () {
-  return this.request('GET','/auth')
+  return this.request('GET','auth')
              .then( (r) => ({nonce: r.nonce, signature: this.sign(r.nonce), mdid: this._mdid}) )
-             .then( (d) => this.request('POST', '/auth' , d))
+             .then( (d) => this.request('POST', 'auth' , d))
              .then( (r) => { this._auth_token = r.token; return r.token});
 };
 
 MDID.prototype.getMessages = function (from) {
   var getParams = {};
   if (from != undefined) getParams.from = from;
-  return this.request('GET', '/messages', getParams);
+  return this.request('GET', 'messages', getParams);
 };
 
 MDID.prototype.getMessage = function (id) {
-  return this.request('GET', '/message/' + id);
+  return this.request('GET', 'message/' + id);
 };
 
 MDID.prototype.processMessage = function (msgId) {
-  return this.request('PATCH', '/message/' + msgId);
+  return this.request('PATCH', 'message/' + msgId);
 };
 
 MDID.prototype.addContact = function (contactMdid) {
-  return this.request('PUT', '/trusted/' + contactMdid);
+  return this.request('PUT', 'trusted/' + contactMdid);
 };
 
 MDID.prototype.getContacts = function () {
-  return this.request('GET', '/trusted');
+  return this.request('GET', 'trusted');
 };
 
 MDID.prototype.getContact = function (contactMdid) {
-  return this.request('GET', '/trusted/' + contactMdid);
+  return this.request('GET', 'trusted/' + contactMdid);
 };
 
 MDID.prototype.removeContact = function (contactMdid) {
-  return this.request('DELETE', '/trusted/' + contactMdid);
+  return this.request('DELETE', 'trusted/' + contactMdid);
 };
 
 MDID.prototype.sendMessage = function (mdidRecipient, payload, type) {
@@ -140,7 +138,7 @@ MDID.prototype.sendMessage = function (mdidRecipient, payload, type) {
     sender: this.mdid,
     recipient: mdidRecipient
   };
-  return this.request('POST', '/messages', body);
+  return this.request('POST', 'messages', body);
 };
 
 MDID.prototype.readMessage = function (msg) {
@@ -187,4 +185,24 @@ MDID.prototype.sendPaymentRequestResponse = function (requestMessage) {
     return this.sendMessage(requestMessage.sender, JSON.stringify(requestResponse), 2);
   };
   return msgP.then(f.bind(this));
+};
+
+// createInvitation :: Promise InvitationID
+MDID.prototype.createInvitation = function () {
+  return this.request('POST', 'share');
+};
+
+// readInvitation :: String -> Promise RequesterID
+MDID.prototype.readInvitation = function (id) {
+  return this.request('GET', 'share/' + id);
+};
+
+// acceptInvitation :: String -> Promise ()
+MDID.prototype.acceptInvitation = function (id) {
+  return this.request('POST', 'share/' + id);
+};
+
+// deleteInvitation :: String -> Promise ()
+MDID.prototype.deleteInvitation = function (id) {
+  return this.request('DELETE', 'share/' + id);
 };
