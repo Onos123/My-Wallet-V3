@@ -58,7 +58,6 @@ function Wallet (object) {
 
   // tx_notes dictionary
   this._tx_notes = obj.tx_notes || {};
-
   // tx_tags list (not sure if list or object)
   // this._tx_tags = obj.tx_tags || [];
 

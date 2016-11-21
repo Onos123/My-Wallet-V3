@@ -42,13 +42,14 @@ module.exports = {
   Metadata: require('./src/metadata'),
   Bitcoin: require('bitcoinjs-lib'),
   External: require('./src/external'),
-  MDID: require('./src/mdid'),
+  SharedMetadata: require('./src/sharedMetadata'),
+  MetadataGeneral: require('./src/metadataGeneral'),
   BuySell: require('./src/buy-sell'),
   Contacts: require('./src/contacts'),
   constants: require('./src/constants'),
   BigInteger: require('bigi/lib'),
   BIP39: require('bip39'),
   Networks: require('bitcoinjs-lib/src/networks'),
-  Messenger: require('./src/messenger'),
+  R: require('ramda'),
   ECDSA: require('bitcoinjs-lib/src/ecdsa')
 };
