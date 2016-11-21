@@ -43,7 +43,6 @@ module.exports = {
   Bitcoin: require('bitcoinjs-lib'),
   External: require('./src/external'),
   SharedMetadata: require('./src/sharedMetadata'),
-  MetadataGeneral: require('./src/metadataGeneral'),
   BuySell: require('./src/buy-sell'),
   Contacts: require('./src/contacts'),
   constants: require('./src/constants'),
