@@ -7,9 +7,9 @@ var API = require('./api');
 var MyWallet = require('./wallet');
 var Contacts = require('./contacts');
 
-module.exports = MDID;
+module.exports = SharedMetadata;
 
-function MDID (cipher) {
+function SharedMetadata (cipher) {
   // BIP 43 purpose needs to be 31 bit or less. For lack of a BIP number
   // we take the first 31 bits of the SHA256 hash of a reverse domain.
   var hash = WalletCrypto.sha256('info.blockchain.mdid');
@@ -27,7 +27,7 @@ function MDID (cipher) {
   this.contacts.fetch();
 }
 
-Object.defineProperties(MDID.prototype, {
+Object.defineProperties(SharedMetadata.prototype, {
   'mdid': {
     configurable: false,
     get: function () { return this._mdid; }
@@ -38,15 +38,15 @@ Object.defineProperties(MDID.prototype, {
   }
 });
 
-MDID.prototype.sign = function (message) {
+SharedMetadata.prototype.sign = function (message) {
   return Bitcoin.message.sign(this._keyPair, message).toString('base64');
 };
 
-MDID.prototype.verify = function (message, signature, mdid) {
+SharedMetadata.prototype.verify = function (message, signature, mdid) {
   return Bitcoin.message.verify (mdid, signature, message);
 }
 
-MDID.prototype.request = function (method, endpoint, data) {
+SharedMetadata.prototype.request = function (method, endpoint, data) {
   var url = API.API_ROOT_URL + 'metadata/' + endpoint;
   var options = {
     headers: {
@@ -92,63 +92,63 @@ MDID.prototype.request = function (method, endpoint, data) {
     .then(checkStatus);
 };
 
-MDID.prototype.getToken = function () {
+SharedMetadata.prototype.getToken = function () {
   return this.request('GET','auth')
              .then( (r) => ({nonce: r.nonce, signature: this.sign(r.nonce), mdid: this._mdid}) )
              .then( (d) => this.request('POST', 'auth' , d))
              .then( (r) => { this._auth_token = r.token; return r.token});
 };
 
-MDID.prototype.getMessages = function (from) {
+SharedMetadata.prototype.getMessages = function (from) {
   var getParams = {};
   if (from != undefined) getParams.from = from;
   return this.request('GET', 'messages', getParams);
 };
 
-MDID.prototype.getMessage = function (id) {
+SharedMetadata.prototype.getMessage = function (id) {
   return this.request('GET', 'message/' + id);
 };
 
-MDID.prototype.processMessage = function (msgId) {
+SharedMetadata.prototype.processMessage = function (msgId) {
   return this.request('PATCH', 'message/' + msgId);
 };
 
-MDID.prototype.addContact = function (contactMdid) {
+SharedMetadata.prototype.addContact = function (contactMdid) {
   return this.request('PUT', 'trusted/' + contactMdid);
 };
 
-MDID.prototype.getContacts = function () {
+SharedMetadata.prototype.getContacts = function () {
   return this.request('GET', 'trusted');
 };
 
-MDID.prototype.getContact = function (contactMdid) {
+SharedMetadata.prototype.getContact = function (contactMdid) {
   return this.request('GET', 'trusted/' + contactMdid);
 };
 
-MDID.prototype.removeContact = function (contactMdid) {
+SharedMetadata.prototype.removeContact = function (contactMdid) {
   return this.request('DELETE', 'trusted/' + contactMdid);
 };
 
-MDID.prototype.sendMessage = function (mdidRecipient, payload, type) {
+SharedMetadata.prototype.sendMessage = function (mdidRecipient, payload, type) {
   var encrypted = this.encryptFor(payload, mdidRecipient);
   var body = {
     type: type,
     payload: encrypted,
     signature: this.sign(encrypted),
-    sender: this.mdid,
+    // sender: this.mdid,
     recipient: mdidRecipient
   };
   return this.request('POST', 'messages', body);
 };
 
-MDID.prototype.readMessage = function (msg) {
+SharedMetadata.prototype.readMessage = function (msg) {
   // TODO :: The public key can be extracted from the signature
   return this.verify(msg.payload, msg.signature, msg.sender)
     ? Promise.resolve(this.decryptFrom(msg.payload, msg.sender))
     : Promise.reject('Wrong Signature');
 };
 
-MDID.prototype.encryptFor = function (message, mdid) {
+SharedMetadata.prototype.encryptFor = function (message, mdid) {
   var contactObject = this.contacts.get(mdid);
   var contactPublicKey = Contacts.toPubKey(contactObject);
   var sharedSecret = contactPublicKey.Q.multiply(this._keyPair.d).getEncoded(true);
@@ -156,7 +156,7 @@ MDID.prototype.encryptFor = function (message, mdid) {
   return WalletCrypto.encryptDataWithKey(message, sharedKey);
 };
 
-MDID.prototype.decryptFrom = function (message, mdid) {
+SharedMetadata.prototype.decryptFrom = function (message, mdid) {
   var contactObject = this.contacts.get(mdid);
   var contactPublicKey = Contacts.toPubKey(contactObject);
   var sharedSecret = contactPublicKey.Q.multiply(this._keyPair.d).getEncoded(true);
@@ -164,7 +164,7 @@ MDID.prototype.decryptFrom = function (message, mdid) {
   return WalletCrypto.decryptDataWithKey(message, sharedKey);
 };
 
-MDID.prototype.sendPaymentRequest = function (mdid, amount, note) {
+SharedMetadata.prototype.sendPaymentRequest = function (mdid, amount, note) {
   // type 1 :: paymentRequest
   var paymentRequest = {
     amount: amount,
@@ -173,7 +173,7 @@ MDID.prototype.sendPaymentRequest = function (mdid, amount, note) {
   return this.sendMessage(mdid, JSON.stringify(paymentRequest), 1);
 };
 
-MDID.prototype.sendPaymentRequestResponse = function (requestMessage) {
+SharedMetadata.prototype.sendPaymentRequestResponse = function (requestMessage) {
   // type 2 :: payment request answer
   var msgP = this.readMessage(requestMessage);
   var f = function (msg) {
@@ -188,21 +188,21 @@ MDID.prototype.sendPaymentRequestResponse = function (requestMessage) {
 };
 
 // createInvitation :: Promise InvitationID
-MDID.prototype.createInvitation = function () {
+SharedMetadata.prototype.createInvitation = function () {
   return this.request('POST', 'share');
 };
 
 // readInvitation :: String -> Promise RequesterID
-MDID.prototype.readInvitation = function (id) {
+SharedMetadata.prototype.readInvitation = function (id) {
   return this.request('GET', 'share/' + id);
 };
 
 // acceptInvitation :: String -> Promise ()
-MDID.prototype.acceptInvitation = function (id) {
+SharedMetadata.prototype.acceptInvitation = function (id) {
   return this.request('POST', 'share/' + id);
 };
 
 // deleteInvitation :: String -> Promise ()
-MDID.prototype.deleteInvitation = function (id) {
+SharedMetadata.prototype.deleteInvitation = function (id) {
   return this.request('DELETE', 'share/' + id);
 };
