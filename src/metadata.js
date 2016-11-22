@@ -4,6 +4,7 @@ var WalletCrypto = require('./wallet-crypto');
 var Bitcoin = require('bitcoinjs-lib');
 var API = require('./api');
 var Helpers = require('./helpers');
+var constants = require('./constants');
 import * as R from 'ramda'
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -94,7 +95,7 @@ Metadata.message = R.curry(
 Metadata.magic = R.curry(
   function (payload, prevMagic) {
     const msg = this.message(payload, prevMagic);
-    return Bitcoin.message.magicHash(msg, Bitcoin.networks.bitcoin);
+    return Bitcoin.message.magicHash(msg, constants.getNetwork());
   }
 )
 
@@ -200,7 +201,7 @@ Metadata.fromMetadataHDNode = function (metadataHDNode, typeId) {
   // 2: whats-new
   // 3: buy-sell
   // 4: contacts
-  const payloadTypeNode = metaDataHDNode.deriveHardened(TypeId);
+  const payloadTypeNode = metadataHDNode.deriveHardened(typeId);
   // purpose' / type' / 0' : https://meta.blockchain.info/{address}
   //                       signature used to authenticate
   // purpose' / type' / 1' : sha256(private key) used as 256 bit AES key
@@ -216,7 +217,7 @@ Metadata.fromMasterHDNode = function (masterHDNode, typeId) {
   // we take the first 31 bits of the SHA256 hash of a reverse domain.
   var hash = WalletCrypto.sha256('info.blockchain.metadata');
   var purpose = hash.slice(0, 4).readUInt32BE(0) & 0x7FFFFFFF; // 510742
-  var metaDataHDNode = masterHDNode.deriveHardened(purpose);
+  var metadataHDNode = masterHDNode.deriveHardened(purpose);
   return Metadata.fromMetadataHDNode(metadataHDNode, typeId);
 }
 
